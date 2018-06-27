@@ -112,7 +112,7 @@ class BasePortiaStorage(CommittingStorage, Storage):
 
     def open_with_default(self, name, default=None):
         try:
-            return self.open(name)
+            return self.open(name, mode='r')
         except IOError as error:
             if error.errno == errno.ENOENT:
                 return ContentFile(json.dumps(default), name)
@@ -137,8 +137,11 @@ class FsStorage(BasePortiaStorage, FileSystemStorage):
         return os.path.isfile(self.path(name))
 
     def move(self, old_file_name, new_file_name, allow_overwrite=False):
-        file_move_safe(self.path(old_file_name), self.path(new_file_name),
-                       allow_overwrite=True)
+        if self.isdir(old_file_name):
+            shutil.move(self.path(old_file_name), self.path(new_file_name))
+        else:
+            file_move_safe(self.path(old_file_name), self.path(new_file_name),
+                           allow_overwrite=True)
 
     def rmtree(self, name):
         shutil.rmtree(self.path(name))
@@ -167,9 +170,16 @@ class FsStorage(BasePortiaStorage, FileSystemStorage):
         if not os.path.isdir(directory):
             raise IOError("%s exists and is not a directory." % directory)
 
-        with open(full_path, 'w') as f:
+        try:
+            _file = None
             for chunk in content.chunks():
-                f.write(chunk)
+                if _file is None:
+                    mode = 'wb' if isinstance(chunk, bytes) else 'wt'
+                    _file = open(full_path, mode)
+                _file.write(chunk)
+        finally:
+            if _file is not None:
+                _file.close()
 
         if self.file_permissions_mode is not None:
             os.chmod(full_path, self.file_permissions_mode)
@@ -355,9 +365,10 @@ class GitStorage(BasePortiaStorage):
             # Handle paths for mysql repo where there is no project name
             if path.startswith(getattr(self.repo._repo, '_name', '\0')):
                 path = os.path.join(*(path.split('/')[1:]))
-        if hasattr(path, 'encode'):
+        try:
             return path.encode('utf-8')
-        return path
+        except AttributeError:
+            return path
 
     def commit(self, message='Saving multiple files'):
         working_tree = self._working_tree
